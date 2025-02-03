@@ -4,6 +4,7 @@
   import Math from './Math.svelte';
   
   export let content: string = '';
+  export let isEditing: boolean = false;
   
   $: segments = parseMathContent(content);
   
@@ -29,15 +30,19 @@
   }
 </script>
 
-{#each segments as segment}
-  {#if segment.type === 'text'}
-    {@html renderText(segment.content)}
-  {:else if segment.type === 'inline-math'}
-    <Math math={segment.content} displayMode={false} />
-  {:else if segment.type === 'display-math'}
-    <Math math={segment.content} displayMode={true} />
-  {/if}
-{/each}
+{#if isEditing}
+  <slot />
+{:else}
+  {#each segments as segment}
+    {#if segment.type === 'text'}
+      {@html renderText(segment.content)}
+    {:else if segment.type === 'inline-math'}
+      <Math math={segment.content} displayMode={false} />
+    {:else if segment.type === 'display-math'}
+      <Math math={segment.content} displayMode={true} />
+    {/if}
+  {/each}
+{/if}
 
 <style>
   :global(.rich-text p) {

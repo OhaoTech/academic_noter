@@ -1,15 +1,21 @@
 <script lang="ts">
   import type { NotebookCell } from '$lib/types/notebook';
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { EditorView } from 'codemirror';
+  import { EditorView, basicSetup } from 'codemirror';
+  import { EditorState } from '@codemirror/state';
   import { markdown } from '@codemirror/lang-markdown';
   import { python } from '@codemirror/lang-python';
   import { javascript } from '@codemirror/lang-javascript';
+  import { keymap } from '@codemirror/view';
+  import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
+  import { bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
+  import { closeBrackets, autocompletion } from '@codemirror/autocomplete';
+  import { lintGutter, lintKeymap } from '@codemirror/lint';
+  import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
   import { oneDark } from '@codemirror/theme-one-dark';
   import RichText from './RichText.svelte';
 
   export let cell: NotebookCell;
-  export let isEditing: boolean = true;  // Default to editing mode
   export let isExecuting: boolean = false;
 
   const dispatch = createEventDispatcher();
@@ -17,85 +23,88 @@
   let editorElement: HTMLElement;
   let outputElement: HTMLElement;
 
-  // Watch for changes in isEditing
-  $: if (isEditing && editorElement && !editor) {
-    setupEditor();
-  } else if (!isEditing && editor) {
-    editor.destroy();
-    editor = null;
-  }
-
-  onMount(() => {
-    if (isEditing) {
-      setupEditor();
-    }
-  });
-
   function setupEditor() {
-    if (!editorElement) return;  // Guard against null element
-    
-    const extensions = [oneDark];
-    
+    const extensions = [
+      basicSetup,
+      oneDark,
+      EditorView.lineWrapping,
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          dispatch('change', {
+            id: cell.metadata.id,
+            content: update.state.doc.toString()
+          });
+        }
+      })
+    ];
+
+    // Add language support based on cell type
     switch (cell.metadata.type) {
-      case 'markdown':
-      case 'latex':
-        extensions.push(markdown());
-        break;
       case 'python':
         extensions.push(python());
         break;
       case 'javascript':
         extensions.push(javascript());
         break;
+      case 'markdown':
+      case 'latex':
+        extensions.push(markdown());
+        break;
     }
 
     editor = new EditorView({
-      parent: editorElement,
+      doc: cell.content.source,
       extensions,
-      doc: cell.content.source
+      parent: editorElement
     });
-
-    // Format math content on initial load for latex cells
-    if (cell.metadata.type === 'latex') {
-      const content = cell.content.source;
-      // Replace plain text math variables with LaTeX
-      const formattedContent = content
-        .replace(/\$L_o\$(?!\s+is)/g, '$L_o(x, \\omega_o)$')
-        .replace(/\$L_e\$(?!\s+is)/g, '$L_e(x, \\omega_o)$')
-        .replace(/\$f_r\$(?!\s+is)/g, '$f_r(x, \\omega_i, \\omega_o)$')
-        .replace(/\$L_i\$(?!\s+is)/g, '$L_i(x, \\omega_i)$');
-      
-      editor.dispatch({
-        changes: { from: 0, to: editor.state.doc.length, insert: formattedContent }
-      });
-    }
-
-    // Set focus to the editor
-    editor.focus();
   }
 
-  // Update cell content when editor changes
-  function handleEditorChange() {
+  onMount(() => {
+    if (editorElement) {
+      setupEditor();
+    }
+
+    return () => {
+      if (editor) {
+        editor.destroy();
+      }
+    };
+  });
+
+  function deleteCell() {
+    dispatch('delete', {
+      id: cell.metadata.id
+    });
+  }
+
+  function moveCell(direction: 'up' | 'down') {
+    dispatch('move', {
+      id: cell.metadata.id,
+      direction
+    });
+  }
+
+  function saveContent() {
     if (editor) {
       const content = editor.state.doc.toString();
-      cell.content.source = content;
-      dispatch('change', {
-        id: cell.metadata.id,
-        content
-      });
+      if (content !== cell.content.source) {
+        cell.content.source = content;
+        cell.metadata.modified = new Date().toISOString();
+        dispatch('change', {
+          id: cell.metadata.id,
+          content
+        });
+      }
     }
   }
 
   async function executeCell() {
     if (isExecuting) return;
-    
-    // Make sure to get the latest content from the editor
-    const content = editor?.state?.doc?.toString() || cell.content.source;
-    
+    saveContent();
     dispatch('execute', {
       id: cell.metadata.id,
       type: cell.metadata.type,
-      content
+      content: cell.content.source
     });
   }
 
@@ -117,93 +126,183 @@
     }
   }
 
-  // Clean up editor on destroy
   onDestroy(() => {
     if (editor) {
+      saveContent();
       editor.destroy();
     }
   });
 </script>
 
-<div class="cell" class:editing={isEditing}>
-  <div class="cell-controls">
-    <button on:click={() => dispatch('toggle-edit')}>
-      {isEditing ? 'Preview' : 'Edit'}
-    </button>
-    {#if !['markdown', 'latex'].includes(cell.metadata.type)}
-      <button 
-        on:click={executeCell}
-        disabled={isExecuting}
-      >
-        {isExecuting ? 'Running...' : 'Run'}
-      </button>
-    {/if}
-  </div>
-
-  <div class="cell-content">
-    {#if isEditing}
+<div class="cell">
+  <div class="cell-content {cell.metadata.type === 'markdown' || cell.metadata.type === 'latex' ? 'markdown-layout' : ''}">
+    <div class="editor-section">
       <div bind:this={editorElement} class="editor" />
-    {:else}
-      {#if cell.metadata.type === 'markdown' || cell.metadata.type === 'latex'}
+    </div>
+
+    {#if (cell.metadata.type === 'markdown' || cell.metadata.type === 'latex')}
+      <div class="preview-section">
         <div class="rich-content">
           <RichText content={cell.content.source} />
         </div>
-      {:else}
-        <pre class="code-preview">{cell.content.source}</pre>
-      {/if}
+      </div>
     {/if}
 
     {#if cell.content.outputs?.length}
-      <div bind:this={outputElement} class="cell-output">
-        {@html renderOutput()}
+      <div class="output-section">
+        <div bind:this={outputElement} class="cell-output">
+          {@html renderOutput()}
+        </div>
       </div>
     {/if}
   </div>
+
+  {#if !['markdown', 'latex'].includes(cell.metadata.type)}
+    <button 
+      class="run-btn"
+      on:click={executeCell}
+      disabled={isExecuting}
+    >
+      {isExecuting ? 'Running...' : 'Run'}
+    </button>
+  {/if}
 </div>
 
 <style>
   .cell {
-    border: 1px solid #ddd;
-    margin: 8px 0;
+    position: relative;
+    width: 100%;
+  }
+
+  .cell-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 100px;
+    gap: 16px;
+  }
+
+  .markdown-layout {
+    flex-direction: row;
+  }
+
+  .markdown-layout .editor-section,
+  .markdown-layout .preview-section {
+    flex: 1;
+    width: 50%;
+  }
+
+  .output-section {
+    width: 100%;
+  }
+
+  .preview-section {
+    padding: 8px 16px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: #fff;
+  }
+
+  .editor-section {
+    flex: 1;
+    min-height: 100px;
+    border: 1px solid #e0e0e0;
     border-radius: 4px;
     overflow: hidden;
   }
 
-  .cell-controls {
-    padding: 8px;
-    background: #f5f5f5;
-    border-bottom: 1px solid #ddd;
-  }
-
-  .cell-content {
-    padding: 16px;
-  }
-
   .editor {
+    height: 100%;
     min-height: 100px;
   }
 
+  .editor :global(.cm-editor) {
+    height: 100%;
+    min-height: 100px;
+  }
+
+  .editor :global(.cm-scroller) {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .editor :global(.cm-content) {
+    white-space: pre-wrap;
+    word-break: break-word;
+    word-wrap: break-word;
+  }
+
+  .editor :global(.cm-gutters) {
+    border-right: 1px solid #e0e0e0;
+    background: #fafafa;
+    min-width: 32px;
+  }
+
+  .run-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 12px;
+    border: 1px solid #1976d2;
+    border-radius: 4px;
+    background: #1976d2;
+    color: white;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+    z-index: 10;
+  }
+
+  .run-btn:hover {
+    background: #1565c0;
+    border-color: #1565c0;
+  }
+
+  .run-btn:disabled {
+    background: #ccc;
+    border-color: #bbb;
+    cursor: not-allowed;
+  }
+
   .cell-output {
-    margin-top: 8px;
-    padding: 8px;
+    margin-top: 16px;
+    padding: 12px;
     background: #f8f8f8;
     border-radius: 4px;
+    border: 1px solid #eee;
+    font-size: 13px;
   }
 
   .error {
-    color: #e53935;
+    color: #d32f2f;
     background: #ffebee;
-    padding: 8px;
+    padding: 8px 12px;
     border-radius: 4px;
+    font-size: 13px;
   }
 
   .rich-content {
-    font-size: 1.1em;
-    line-height: 1.5;
+    font-size: 15px;
+    line-height: 1.6;
+    color: #333;
   }
 
   .rich-content :global(p) {
-    margin: 0.8em 0;
+    margin: 0 0 1em 0;
+  }
+
+  .rich-content :global(h1) {
+    font-size: 2em;
+    margin: 0.67em 0;
+    font-weight: 400;
+    color: #202124;
+  }
+
+  .rich-content :global(h2) {
+    font-size: 1.5em;
+    margin: 0.83em 0;
+    font-weight: 400;
+    color: #202124;
   }
 
   .rich-content :global(.katex-display) {
@@ -212,9 +311,15 @@
     overflow-y: hidden;
   }
 
-  .threejs-container {
-    width: 100%;
-    height: 400px;
-    background: #000;
+  .code-preview {
+    font-family: 'Roboto Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 12px;
+    background: #f8f8f8;
+    border-radius: 4px;
+    border: 1px solid #eee;
+    margin: 0;
+    white-space: pre-wrap;
   }
 </style>  

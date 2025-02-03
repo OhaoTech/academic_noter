@@ -164,11 +164,9 @@ void main() {
         
         <Cell
           {cell}
-          isEditing={selectedCell !== cell.metadata.id}
           isExecuting={executingCells.has(cell.metadata.id)}
           on:change={handleCellChange}
           on:execute={handleCellExecution}
-          on:toggle-edit={() => selectedCell = selectedCell === cell.metadata.id ? null : cell.metadata.id}
         />
         
         {#if cell.metadata.type === 'javascript'}

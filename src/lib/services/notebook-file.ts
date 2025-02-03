@@ -104,4 +104,128 @@ export class NotebookFileService {
       );
     });
   }
+
+  static createNewCell(type: string = 'markdown'): NotebookCell {
+    return {
+      metadata: {
+        id: uuidv4(),
+        type,
+        created: new Date().toISOString(),
+        modified: new Date().toISOString()
+      },
+      content: {
+        source: type === 'markdown' ? 'Start writing your notes here...' : '',
+        outputs: []
+      }
+    };
+  }
+
+  static updateCell(notebook: Notebook, cellId: string, updates: Partial<NotebookCell>): Notebook {
+    const cellIndex = notebook.cells.findIndex(cell => cell.metadata.id === cellId);
+    if (cellIndex === -1) return notebook;
+
+    const updatedCell = {
+      ...notebook.cells[cellIndex],
+      ...updates,
+      metadata: {
+        ...notebook.cells[cellIndex].metadata,
+        ...updates.metadata,
+        modified: new Date().toISOString()
+      }
+    };
+
+    const updatedCells = [...notebook.cells];
+    updatedCells[cellIndex] = updatedCell;
+
+    return {
+      ...notebook,
+      metadata: {
+        ...notebook.metadata,
+        modified: new Date().toISOString()
+      },
+      cells: updatedCells
+    };
+  }
+
+  static addCell(notebook: Notebook, type: string, position?: number): Notebook {
+    const newCell = this.createNewCell(type);
+    const cells = [...notebook.cells];
+    
+    if (typeof position === 'number' && position >= 0 && position <= cells.length) {
+      cells.splice(position, 0, newCell);
+    } else {
+      cells.push(newCell);
+    }
+
+    return {
+      ...notebook,
+      metadata: {
+        ...notebook.metadata,
+        modified: new Date().toISOString()
+      },
+      cells
+    };
+  }
+
+  static removeCell(notebook: Notebook, cellId: string): Notebook {
+    const cellIndex = notebook.cells.findIndex(cell => cell.metadata.id === cellId);
+    if (cellIndex === -1) return notebook;
+
+    const cells = notebook.cells.filter(cell => cell.metadata.id !== cellId);
+    
+    // Don't allow empty notebook
+    if (cells.length === 0) {
+      cells.push(this.createNewCell('markdown'));
+    }
+
+    return {
+      ...notebook,
+      metadata: {
+        ...notebook.metadata,
+        modified: new Date().toISOString()
+      },
+      cells
+    };
+  }
+
+  static moveCell(notebook: Notebook, cellId: string, direction: 'up' | 'down'): Notebook {
+    const cellIndex = notebook.cells.findIndex(cell => cell.metadata.id === cellId);
+    if (cellIndex === -1) return notebook;
+
+    const newIndex = direction === 'up' ? cellIndex - 1 : cellIndex + 1;
+    if (newIndex < 0 || newIndex >= notebook.cells.length) return notebook;
+
+    const cells = [...notebook.cells];
+    [cells[cellIndex], cells[newIndex]] = [cells[newIndex], cells[cellIndex]];
+
+    return {
+      ...notebook,
+      metadata: {
+        ...notebook.metadata,
+        modified: new Date().toISOString()
+      },
+      cells
+    };
+  }
+
+  static clearCellOutput(notebook: Notebook, cellId: string): Notebook {
+    return this.updateCell(notebook, cellId, {
+      content: {
+        ...notebook.cells.find(cell => cell.metadata.id === cellId)?.content,
+        outputs: []
+      }
+    });
+  }
+
+  static addCellOutput(notebook: Notebook, cellId: string, output: any): Notebook {
+    const cell = notebook.cells.find(cell => cell.metadata.id === cellId);
+    if (!cell) return notebook;
+
+    return this.updateCell(notebook, cellId, {
+      content: {
+        ...cell.content,
+        outputs: [...(cell.content.outputs || []), output]
+      }
+    });
+  }
 } 
