@@ -1,0 +1,12 @@
+{
+    "zotero": {
+        "storage_path": "/Users/franktudor/Zotero/storage",
+        "watch_changes": true
+    },
+    "academic_notes": {
+        "root_path": "./academic_notes",
+        "papers_dir": "papers",
+        "notes_dir": "notes",
+        "templates_dir": "templates"
+    }
+} 
