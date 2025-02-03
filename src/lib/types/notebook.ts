@@ -1,4 +1,4 @@
-export type CellType = 'markdown' | 'latex' | 'python' | 'javascript' | 'shader';
+export type CellType = 'markdown' | 'python' | 'javascript' | 'shader';
 
 export interface NotebookMetadata {
   title: string;

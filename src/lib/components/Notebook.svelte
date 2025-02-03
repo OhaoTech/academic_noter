@@ -22,7 +22,7 @@
     }
   });
 
-  function addCell(type: 'markdown' | 'python' | 'javascript' | 'latex' | 'shader', index?: number) {
+  function addCell(type: 'markdown' | 'python' | 'javascript' | 'shader', index?: number) {
     const newCell: NotebookCell = {
       metadata: {
         id: uuidv4(),
@@ -155,7 +155,6 @@ void main() {
       <button on:click={() => addCell('markdown')}>Add Markdown</button>
       <button on:click={() => addCell('python')} disabled={!$pythonReady}>Add Python</button>
       <button on:click={() => addCell('javascript')}>Add JavaScript</button>
-      <button on:click={() => addCell('latex')}>Add LaTeX</button>
       <button on:click={() => addCell('shader')}>Add Shader</button>
     </div>
   </div>

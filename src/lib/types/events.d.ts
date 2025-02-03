@@ -6,7 +6,7 @@ declare namespace App {
 
   interface CellExecuteEvent {
     id: string;
-    type: 'markdown' | 'python' | 'javascript' | 'latex' | 'shader';
+    type: 'markdown' | 'python' | 'javascript' | 'shader';
     content: string;
   }
 
