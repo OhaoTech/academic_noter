@@ -1,16 +1,15 @@
 <script lang="ts">
   import type { NotebookCell } from '$lib/types/notebook';
-  import { onMount, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { EditorView } from 'codemirror';
   import { markdown } from '@codemirror/lang-markdown';
   import { python } from '@codemirror/lang-python';
   import { javascript } from '@codemirror/lang-javascript';
   import { oneDark } from '@codemirror/theme-one-dark';
-  import { marked } from 'marked';
-  import katex from 'katex';
+  import RichText from './RichText.svelte';
 
   export let cell: NotebookCell;
-  export let isEditing: boolean = false;
+  export let isEditing: boolean = true;  // Default to editing mode
   export let isExecuting: boolean = false;
 
   const dispatch = createEventDispatcher();
@@ -18,31 +17,13 @@
   let editorElement: HTMLElement;
   let outputElement: HTMLElement;
 
-  // Configure marked to use KaTeX for math
-  const renderer = new marked.Renderer();
-  renderer.code = function(code: string, language: string | undefined) {
-    if (language === 'math') {
-      try {
-        return katex.renderToString(code, { displayMode: true });
-      } catch (error) {
-        if (error instanceof Error) {
-          return `<pre class="error">KaTeX error: ${error.message}</pre>`;
-        }
-        return `<pre class="error">KaTeX error: Unknown error</pre>`;
-      }
-    }
-    return `<pre><code class="language-${language || ''}">${code}</code></pre>`;
-  };
-
-  marked.setOptions({
-    renderer,
-    gfm: true,
-    breaks: true,
-    sanitize: false,
-    smartLists: true,
-    smartypants: true,
-    xhtml: true
-  });
+  // Watch for changes in isEditing
+  $: if (isEditing && editorElement && !editor) {
+    setupEditor();
+  } else if (!isEditing && editor) {
+    editor.destroy();
+    editor = null;
+  }
 
   onMount(() => {
     if (isEditing) {
@@ -51,10 +32,13 @@
   });
 
   function setupEditor() {
+    if (!editorElement) return;  // Guard against null element
+    
     const extensions = [oneDark];
     
     switch (cell.metadata.type) {
       case 'markdown':
+      case 'latex':
         extensions.push(markdown());
         break;
       case 'python':
@@ -71,18 +55,47 @@
       doc: cell.content.source
     });
 
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: cell.content.source }
-    });
+    // Format math content on initial load for latex cells
+    if (cell.metadata.type === 'latex') {
+      const content = cell.content.source;
+      // Replace plain text math variables with LaTeX
+      const formattedContent = content
+        .replace(/\$L_o\$(?!\s+is)/g, '$L_o(x, \\omega_o)$')
+        .replace(/\$L_e\$(?!\s+is)/g, '$L_e(x, \\omega_o)$')
+        .replace(/\$f_r\$(?!\s+is)/g, '$f_r(x, \\omega_i, \\omega_o)$')
+        .replace(/\$L_i\$(?!\s+is)/g, '$L_i(x, \\omega_i)$');
+      
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: formattedContent }
+      });
+    }
+
+    // Set focus to the editor
+    editor.focus();
+  }
+
+  // Update cell content when editor changes
+  function handleEditorChange() {
+    if (editor) {
+      const content = editor.state.doc.toString();
+      cell.content.source = content;
+      dispatch('change', {
+        id: cell.metadata.id,
+        content
+      });
+    }
   }
 
   async function executeCell() {
     if (isExecuting) return;
     
+    // Make sure to get the latest content from the editor
+    const content = editor?.state?.doc?.toString() || cell.content.source;
+    
     dispatch('execute', {
       id: cell.metadata.id,
       type: cell.metadata.type,
-      content: editor?.state?.doc?.toString() || cell.content.source
+      content
     });
   }
 
@@ -103,14 +116,21 @@
         return '';
     }
   }
+
+  // Clean up editor on destroy
+  onDestroy(() => {
+    if (editor) {
+      editor.destroy();
+    }
+  });
 </script>
 
 <div class="cell" class:editing={isEditing}>
   <div class="cell-controls">
     <button on:click={() => dispatch('toggle-edit')}>
-      {isEditing ? 'View' : 'Edit'}
+      {isEditing ? 'Preview' : 'Edit'}
     </button>
-    {#if cell.metadata.type !== 'markdown'}
+    {#if !['markdown', 'latex'].includes(cell.metadata.type)}
       <button 
         on:click={executeCell}
         disabled={isExecuting}
@@ -124,9 +144,9 @@
     {#if isEditing}
       <div bind:this={editorElement} class="editor" />
     {:else}
-      {#if cell.metadata.type === 'markdown'}
-        <div class="markdown-content">
-          {@html marked(cell.content.source)}
+      {#if cell.metadata.type === 'markdown' || cell.metadata.type === 'latex'}
+        <div class="rich-content">
+          <RichText content={cell.content.source} />
         </div>
       {:else}
         <pre class="code-preview">{cell.content.source}</pre>
@@ -170,7 +190,6 @@
     border-radius: 4px;
   }
 
-  /* svelte-ignore css-unused-selector */
   .error {
     color: #e53935;
     background: #ffebee;
@@ -178,12 +197,21 @@
     border-radius: 4px;
   }
 
-  .markdown-content :global(math) {
-    display: block;
-    margin: 1em 0;
+  .rich-content {
+    font-size: 1.1em;
+    line-height: 1.5;
   }
 
-  /* svelte-ignore css-unused-selector */
+  .rich-content :global(p) {
+    margin: 0.8em 0;
+  }
+
+  .rich-content :global(.katex-display) {
+    margin: 1.5em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
   .threejs-container {
     width: 100%;
     height: 400px;

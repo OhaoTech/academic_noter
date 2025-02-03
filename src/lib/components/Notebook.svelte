@@ -1,3 +1,4 @@
+/// <reference types="svelte" />
 <script lang="ts">
   import type { Notebook, NotebookCell } from '$lib/types/notebook';
   import { onMount } from 'svelte';
@@ -163,7 +164,7 @@ void main() {
         
         <Cell
           {cell}
-          isEditing={selectedCell === cell.metadata.id}
+          isEditing={selectedCell !== cell.metadata.id}
           isExecuting={executingCells.has(cell.metadata.id)}
           on:change={handleCellChange}
           on:execute={handleCellExecution}
