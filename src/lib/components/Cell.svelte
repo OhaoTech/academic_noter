@@ -14,6 +14,7 @@
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
   import { oneDark } from '@codemirror/theme-one-dark';
   import RichText from './RichText.svelte';
+  import { pythonReady, executePythonCode, installingPackage } from '$lib/services/python-runtime';
 
   export let cell: NotebookCell;
   export let isExecuting: boolean = false;
@@ -22,6 +23,9 @@
   let editor: EditorView;
   let editorElement: HTMLElement;
   let outputElement: HTMLElement;
+
+  // Add reactive statement to handle cell updates
+  $: outputs = cell.content.outputs || [];
 
   function setupEditor() {
     const extensions = [
@@ -99,13 +103,37 @@
   }
 
   async function executeCell() {
-    if (isExecuting) return;
-    saveContent();
-    dispatch('execute', {
-      id: cell.metadata.id,
-      type: cell.metadata.type,
-      content: cell.content.source
-    });
+    isExecuting = true;
+    try {
+      if (cell.metadata.type === 'python') {
+        console.log('Executing Python code:', cell.content.source);
+        const result = await executePythonCode(cell.content.source);
+        console.log('Python execution result:', result);
+        
+        // Dispatch the change to parent to update the cell state
+        dispatch('change', {
+          id: cell.metadata.id,
+          content: cell.content.source,
+          outputs: [{
+            type: result.type,
+            data: result.data
+          }]
+        });
+      }
+      // ... handle other cell types ...
+    } catch (error) {
+      console.error('Cell execution failed:', error);
+      dispatch('change', {
+        id: cell.metadata.id,
+        content: cell.content.source,
+        outputs: [{
+          type: 'error',
+          data: error instanceof Error ? error.message : 'Execution failed'
+        }]
+      });
+    } finally {
+      isExecuting = false;
+    }
   }
 
   function renderOutput() {
@@ -135,64 +163,91 @@
 </script>
 
 <div class="cell">
-  <div class="cell-content {cell.metadata.type === 'markdown' || cell.metadata.type === 'latex' ? 'markdown-layout' : ''}">
+  <div class="cell-content">
     <div class="editor-section">
       <div bind:this={editorElement} class="editor" />
+      {#if !['markdown', 'latex'].includes(cell.metadata.type)}
+        <button 
+          class="run-btn"
+          on:click={executeCell}
+          disabled={isExecuting || (cell.metadata.type === 'python' && !$pythonReady) || $installingPackage}
+        >
+          {#if cell.metadata.type === 'python' && !$pythonReady}
+            Initializing...
+          {:else if $installingPackage}
+            Installing {$installingPackage}...
+          {:else if isExecuting}
+            Running...
+          {:else}
+            Run
+          {/if}
+        </button>
+      {/if}
     </div>
 
-    {#if (cell.metadata.type === 'markdown' || cell.metadata.type === 'latex')}
-      <div class="preview-section">
-        <div class="rich-content">
-          <RichText content={cell.content.source} />
+    <div class="right-panel">
+      {#if (cell.metadata.type === 'markdown' || cell.metadata.type === 'latex')}
+        <div class="preview-section">
+          <div class="rich-content">
+            <RichText content={cell.content.source} />
+          </div>
         </div>
-      </div>
-    {/if}
+      {/if}
 
-    {#if cell.content.outputs?.length}
-      <div class="output-section">
-        <div bind:this={outputElement} class="cell-output">
-          {@html renderOutput()}
+      {#if outputs.length > 0}
+        <div class="output-section">
+          {#each outputs as output}
+            <div class="cell-output">
+              {#if output.type === 'text'}
+                <pre class="output-text">{output.data}</pre>
+              {:else if output.type === 'error'}
+                <pre class="output-error">{output.data}</pre>
+              {:else if output.type === 'image'}
+                <img src={output.data} alt="Plot output" />
+              {/if}
+            </div>
+          {/each}
         </div>
-      </div>
-    {/if}
+      {/if}
+    </div>
   </div>
-
-  {#if !['markdown', 'latex'].includes(cell.metadata.type)}
-    <button 
-      class="run-btn"
-      on:click={executeCell}
-      disabled={isExecuting}
-    >
-      {isExecuting ? 'Running...' : 'Run'}
-    </button>
-  {/if}
 </div>
 
 <style>
   .cell {
     position: relative;
     width: 100%;
+    margin: 8px 0;
   }
 
   .cell-content {
     display: flex;
-    flex-direction: column;
-    min-height: 100px;
-    gap: 16px;
-  }
-
-  .markdown-layout {
     flex-direction: row;
+    gap: 16px;
+    min-height: 100px;
   }
 
-  .markdown-layout .editor-section,
-  .markdown-layout .preview-section {
+  .editor-section {
+    position: relative;
     flex: 1;
-    width: 50%;
+    min-width: 45%;
+    max-width: 50%;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
   }
 
-  .output-section {
-    width: 100%;
+  .right-panel {
+    flex: 1;
+    min-width: 45%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .editor {
+    height: 100%;
+    min-height: 100px;
   }
 
   .preview-section {
@@ -202,40 +257,34 @@
     background: #fff;
   }
 
-  .editor-section {
-    flex: 1;
-    min-height: 100px;
+  .output-section {
+    padding: 8px;
+    background: #f8f9fa;
     border: 1px solid #e0e0e0;
     border-radius: 4px;
-    overflow: hidden;
   }
 
-  .editor {
-    height: 100%;
-    min-height: 100px;
+  .cell-output {
+    margin: 4px 0;
   }
 
-  .editor :global(.cm-editor) {
-    height: 100%;
-    min-height: 100px;
-  }
-
-  .editor :global(.cm-scroller) {
-    font-family: 'Roboto Mono', monospace;
-    font-size: 14px;
-    line-height: 1.6;
-  }
-
-  .editor :global(.cm-content) {
+  .output-text {
+    margin: 0;
+    padding: 8px;
+    background: #fff;
+    border-radius: 4px;
+    font-family: monospace;
     white-space: pre-wrap;
-    word-break: break-word;
-    word-wrap: break-word;
   }
 
-  .editor :global(.cm-gutters) {
-    border-right: 1px solid #e0e0e0;
-    background: #fafafa;
-    min-width: 32px;
+  .output-error {
+    margin: 0;
+    padding: 8px;
+    background: #fff0f0;
+    color: #d32f2f;
+    border-radius: 4px;
+    font-family: monospace;
+    white-space: pre-wrap;
   }
 
   .run-btn {
@@ -262,23 +311,20 @@
     background: #ccc;
     border-color: #bbb;
     cursor: not-allowed;
+    opacity: 0.7;
   }
 
   .cell-output {
-    margin-top: 16px;
-    padding: 12px;
-    background: #f8f8f8;
-    border-radius: 4px;
-    border: 1px solid #eee;
-    font-size: 13px;
+    font-family: monospace;
+    white-space: pre-wrap;
+    padding: 4px 8px;
   }
 
   .error {
     color: #d32f2f;
     background: #ffebee;
-    padding: 8px 12px;
+    padding: 8px;
     border-radius: 4px;
-    font-size: 13px;
   }
 
   .rich-content {
@@ -320,6 +366,41 @@
     border-radius: 4px;
     border: 1px solid #eee;
     margin: 0;
+    white-space: pre-wrap;
+  }
+
+  img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .output-section {
+    margin-top: 8px;
+    padding: 8px;
+    background: #f8f9fa;
+    border-radius: 4px;
+  }
+
+  .cell-output {
+    margin: 4px 0;
+  }
+
+  .output-text {
+    margin: 0;
+    padding: 8px;
+    background: #fff;
+    border-radius: 4px;
+    font-family: monospace;
+    white-space: pre-wrap;
+  }
+
+  .output-error {
+    margin: 0;
+    padding: 8px;
+    background: #fff0f0;
+    color: #d32f2f;
+    border-radius: 4px;
+    font-family: monospace;
     white-space: pre-wrap;
   }
 </style>  

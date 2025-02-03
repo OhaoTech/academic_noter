@@ -3,7 +3,7 @@
   import type { Notebook, NotebookCell } from '$lib/types/notebook';
   import { onMount } from 'svelte';
   import Cell from './Cell.svelte';
-  import { initializePython, executePythonCode, isManimCode, executeManimCode } from '$lib/services/python-runtime';
+  import { initializePython, executePythonCode, isManimCode, executeManimCode, pythonReady, pythonLoading } from '$lib/services/python-runtime';
   import { executeThreeCode } from '$lib/services/three-runtime';
   import { executeShaderCode } from '$lib/services/shader-runtime';
   import { v4 as uuidv4 } from 'uuid';
@@ -15,8 +15,11 @@
   let executingCells = new Set<string>();
 
   onMount(async () => {
-    // Initialize Python runtime
-    await initializePython();
+    try {
+      await initializePython();
+    } catch (error) {
+      console.error('Failed to initialize Python:', error);
+    }
   });
 
   function addCell(type: 'markdown' | 'python' | 'javascript' | 'latex' | 'shader', index?: number) {
@@ -124,23 +127,33 @@ void main() {
     }
   }
 
-  function handleCellChange(event: CustomEvent<App.CellChangeEvent>) {
-    const { id, content } = event.detail;
-    const cell = notebook.cells.find(cell => cell.metadata.id === id);
-    if (cell) {
-      cell.content.source = content;
-      cell.metadata.modified = new Date().toISOString();
-      notebook = notebook; // Trigger reactivity
-    }
+  function handleCellChange(event: CustomEvent) {
+    const { id, content, outputs } = event.detail;
+    notebook.cells = notebook.cells.map(cell => {
+      if (cell.metadata.id === id) {
+        return {
+          ...cell,
+          content: {
+            ...cell.content,
+            source: content,
+            outputs: outputs || cell.content.outputs
+          }
+        };
+      }
+      return cell;
+    });
   }
 </script>
 
 <div class="notebook">
   <div class="notebook-header">
     <h1>{notebook.metadata.title}</h1>
+    {#if $pythonLoading}
+      <div class="loading-indicator">Initializing Python Runtime...</div>
+    {/if}
     <div class="notebook-controls">
       <button on:click={() => addCell('markdown')}>Add Markdown</button>
-      <button on:click={() => addCell('python')}>Add Python</button>
+      <button on:click={() => addCell('python')} disabled={!$pythonReady}>Add Python</button>
       <button on:click={() => addCell('javascript')}>Add JavaScript</button>
       <button on:click={() => addCell('latex')}>Add LaTeX</button>
       <button on:click={() => addCell('shader')}>Add Shader</button>
@@ -257,5 +270,19 @@ void main() {
     background: #000;
     border-radius: 4px;
     overflow: hidden;
+  }
+
+  .loading-indicator {
+    padding: 8px 16px;
+    background: #e3f2fd;
+    color: #1976d2;
+    border-radius: 4px;
+    font-size: 14px;
+    margin-bottom: 12px;
+  }
+
+  .notebook-controls button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 </style> 

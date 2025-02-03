@@ -1,84 +1,163 @@
 import type { PyodideInterface } from 'pyodide';
 import { writable } from 'svelte/store';
 
+declare global {
+  interface Window {
+    loadPyodide: (config: any) => Promise<PyodideInterface>;
+  }
+}
+
 export const pythonReady = writable(false);
-let pyodide: PyodideInterface;
+export const pythonLoading = writable(false);
+export const installingPackage = writable<string | null>(null);
+let pyodide: PyodideInterface | null = null;
 
-export async function initializePython() {
+export async function initializePython(): Promise<void> {
   if (pyodide) return;
+  if (!window?.loadPyodide) {
+    throw new Error('Pyodide loading script not found');
+  }
 
-  // Load Pyodide
-  pyodide = await loadPyodide({
-    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
-  });
-
-  // Install required packages
-  await pyodide.loadPackage(['numpy', 'matplotlib']);
-  
-  // Initialize matplotlib for web output
-  await pyodide.runPythonAsync(`
-    import matplotlib.pyplot as plt
-    import io, base64
+  try {
+    pythonLoading.set(true);
     
-    def get_plot_as_base64():
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        return base64.b64encode(buf.read()).decode('utf-8')
-  `);
+    pyodide = await window.loadPyodide({
+      indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
+    });
 
-  pythonReady.set(true);
+    // Initialize micropip
+    await pyodide.loadPackage('micropip');
+    await pyodide.runPythonAsync('import micropip');
+
+    // Set up output capture
+    await pyodide.runPythonAsync(
+      'import sys\n' +
+      'from io import StringIO\n' +
+      '\n' +
+      'class OutputCapture:\n' +
+      '    def __init__(self):\n' +
+      '        self.stdout = StringIO()\n' +
+      '        self.stderr = StringIO()\n' +
+      '    \n' +
+      '    def __enter__(self):\n' +
+      '        sys.stdout = self.stdout\n' +
+      '        sys.stderr = self.stderr\n' +
+      '        return self\n' +
+      '    \n' +
+      '    def __exit__(self, *args):\n' +
+      '        sys.stdout = sys.__stdout__\n' +
+      '        sys.stderr = sys.__stderr__\n' +
+      '    \n' +
+      '    def get_output(self):\n' +
+      '        return self.stdout.getvalue()\n'
+    );
+
+    pythonReady.set(true);
+  } catch (error) {
+    console.error('Failed to initialize Python runtime:', error);
+    throw error;
+  } finally {
+    pythonLoading.set(false);
+  }
+}
+
+export async function installPackage(packageName: string): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  if (!pyodide) {
+    return {
+      success: false,
+      message: 'Python runtime not initialized'
+    };
+  }
+
+  try {
+    installingPackage.set(packageName);
+    await pyodide.runPythonAsync(`
+      import micropip
+      await micropip.install('${packageName}')
+    `);
+    return {
+      success: true,
+      message: `Successfully installed ${packageName}`
+    };
+  } catch (error) {
+    console.error('Package installation error:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Failed to install package'
+    };
+  } finally {
+    installingPackage.set(null);
+  }
 }
 
 export async function executePythonCode(code: string): Promise<{
   type: 'text' | 'image' | 'error';
-  data: any;
+  data: string;
 }> {
   if (!pyodide) {
-    throw new Error('Python runtime not initialized');
+    return {
+      type: 'error',
+      data: 'Python runtime not initialized'
+    };
   }
 
   try {
-    // Check if code contains matplotlib
-    const hasPlot = code.includes('plt.');
-    
-    // Execute the code
-    const result = await pyodide.runPythonAsync(code);
-    
-    // If there's a plot, get it as base64
-    if (hasPlot) {
-      const base64Image = await pyodide.runPythonAsync('get_plot_as_base64()');
+    // Check if this is a pip install command
+    if (code.trim().startsWith('!pip install')) {
+      const packageName = code.trim().split('!pip install')[1].trim();
+      const result = await installPackage(packageName);
       return {
-        type: 'image',
-        data: `data:image/png;base64,${base64Image}`
+        type: result.success ? 'text' : 'error',
+        data: result.message
+      };
+    }
+
+    // Regular code execution
+    await pyodide.runPythonAsync('output_capture = OutputCapture()');
+    const execCode = [
+      'with output_capture:',
+      ...code.split('\n').map(line => '    ' + line),
+      'output_capture.get_output()'
+    ].join('\n');
+    
+    const result = await pyodide.runPythonAsync(execCode);
+    const output = result?.toString() || '';
+    
+    if (output.trim()) {
+      return {
+        type: 'text',
+        data: output.trim()
       };
     }
     
-    // Return text output
     return {
       type: 'text',
-      data: result?.toString() || ''
+      data: 'Code executed successfully'
     };
   } catch (error) {
+    console.error('Python execution error:', error);
     return {
       type: 'error',
-      data: error.message
+      data: error instanceof Error ? error.message : 'Unknown error occurred'
     };
   }
 }
 
 // Function to check if code is Manim-related
 export function isManimCode(code: string): boolean {
-  return code.includes('class') && code.includes('Scene') && code.includes('def construct');
+  return code.includes('class') && 
+         code.includes('Scene') && 
+         code.includes('def construct');
 }
 
-// Special handler for Manim code (will need a backend service)
+// Special handler for Manim code (placeholder for future implementation)
 export async function executeManimCode(code: string): Promise<{
   type: 'video' | 'error';
-  data: any;
+  data: string;
 }> {
-  // This will need to be implemented with a backend service
-  // For now, return an error
   return {
     type: 'error',
     data: 'Manim execution requires backend support - coming soon!'
